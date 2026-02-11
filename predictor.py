@@ -1,6 +1,7 @@
 """
 Reproducible inference: image -> Mask R-CNN segmentation (colored by cell) -> XGBoost -> drug efficacy score.
 """
+
 import os
 import sys
 import argparse
@@ -15,8 +16,12 @@ except ImportError as e:
     err = str(e)
     if "torch" in err or "DLL" in err or "_C" in err or "could not be found" in err:
         print("PyTorch failed to load. On Windows this is often fixed by:")
-        print("  1. Install Microsoft Visual C++ Redistributable (latest): https://aka.ms/vs/17/release/vc_redist.x64.exe")
-        print("  2. Or use Python 3.10 or 3.11 in a venv (PyTorch/Detectron2 are well-tested on those).")
+        print(
+            "  1. Install Microsoft Visual C++ Redistributable (latest): https://aka.ms/vs/17/release/vc_redist.x64.exe"
+        )
+        print(
+            "  2. Or use Python 3.10 or 3.11 in a venv (PyTorch/Detectron2 are well-tested on those)."
+        )
     raise
 
 from detectron2.config import get_cfg
@@ -43,22 +48,33 @@ def extract_features(region_image):
         gray_image = np.clip(gray_image, 0, 255).astype(np.uint8)
     features = {}
     # 1. GLCM
-    glcm = graycomatrix(gray_image, distances=[1], angles=[0], levels=256, symmetric=True, normed=True)
-    for prop in ['energy', 'contrast', 'correlation', 'homogeneity', 'ASM', 'dissimilarity']:
+    glcm = graycomatrix(
+        gray_image, distances=[1], angles=[0], levels=256, symmetric=True, normed=True
+    )
+    for prop in [
+        "energy",
+        "contrast",
+        "correlation",
+        "homogeneity",
+        "ASM",
+        "dissimilarity",
+    ]:
         features[prop] = float(np.round(graycoprops(glcm, prop)[0, 0], 2))
-    features['glcm_entropy'] = float(np.round(-np.sum(np.nan_to_num(glcm * np.log(glcm + 1e-10))), 2))
+    features["glcm_entropy"] = float(
+        np.round(-np.sum(np.nan_to_num(glcm * np.log(glcm + 1e-10))), 2)
+    )
     # 2. Histogram
     pix = gray_image.flatten()
-    features['hist_mean'] = float(pix.mean())
-    features['hist_std'] = float(pix.std())
-    features['hist_skewness'] = float(skew(pix))
-    features['hist_kurtosis'] = float(kurtosis(pix))
+    features["hist_mean"] = float(pix.mean())
+    features["hist_std"] = float(pix.std())
+    features["hist_skewness"] = float(skew(pix))
+    features["hist_kurtosis"] = float(kurtosis(pix))
     # 3. LBP
     lbp = local_binary_pattern(gray_image, P=8, R=1, method="uniform")
     hist, _ = np.histogram(lbp.ravel(), bins=np.arange(0, 12), range=(0, 11))
     hist = hist.astype(float) / (hist.sum() + 1e-6)
     for i, v in enumerate(hist):
-        features[f'lbp_{i}'] = float(v)
+        features[f"lbp_{i}"] = float(v)
     # 4. Shape
     _, binary = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -69,28 +85,28 @@ def extract_features(region_image):
         hull = cv2.convexHull(c)
         hull_area = cv2.contourArea(hull)
         x, y, w, h = cv2.boundingRect(c)
-        features['area'] = float(area)
-        features['perimeter'] = float(perimeter)
-        features['solidity'] = float(area / hull_area if hull_area > 0 else 0)
-        features['aspect_ratio'] = float(w / h if h > 0 else 0)
+        features["area"] = float(area)
+        features["perimeter"] = float(perimeter)
+        features["solidity"] = float(area / hull_area if hull_area > 0 else 0)
+        features["aspect_ratio"] = float(w / h if h > 0 else 0)
     else:
-        for k in ['area', 'perimeter', 'solidity', 'aspect_ratio']:
+        for k in ["area", "perimeter", "solidity", "aspect_ratio"]:
             features[k] = 0.0
     # 5. Edge density
     edges = cv2.Canny(gray_image, 100, 200)
-    features['edge_density'] = float((edges > 0).sum() / (gray_image.size + 1e-10))
+    features["edge_density"] = float((edges > 0).sum() / (gray_image.size + 1e-10))
     # 6. Fourier
     f = np.fft.fftshift(np.fft.fft2(gray_image))
     mag = np.abs(f)
-    features['fourier_mean'] = float(mag.mean())
-    features['fourier_std'] = float(mag.std())
+    features["fourier_mean"] = float(mag.mean())
+    features["fourier_std"] = float(mag.std())
     # 7. Gabor
     angles = [0, np.pi / 4, np.pi / 2]
     for i, angle in enumerate(angles):
         k = cv2.getGaborKernel((21, 21), 5, angle, 10, 0.5, 0, cv2.CV_32F)
         filt = cv2.filter2D(gray_image, cv2.CV_32F, k)
-        features[f'gabor_mean_{i}'] = float(filt.mean())
-        features[f'gabor_std_{i}'] = float(filt.std())
+        features[f"gabor_mean_{i}"] = float(filt.mean())
+        features[f"gabor_std_{i}"] = float(filt.std())
     return np.array([features[k] for k in sorted(features.keys())], dtype=np.float64)
 
 
@@ -98,10 +114,14 @@ def extract_deep_feature_for_box(model, image, box, device):
     """Extract 1024-d deep feature for one box from Mask R-CNN backbone + box head."""
     h, w = image.shape[:2]
     inst = Instances((h, w))
-    inst.pred_boxes = Boxes(torch.tensor(box[None, :], dtype=torch.float32, device=device))
+    inst.pred_boxes = Boxes(
+        torch.tensor(box[None, :], dtype=torch.float32, device=device)
+    )
     inst = inst.to(device)
     inp = {
-        "image": torch.as_tensor(image.transpose(2, 0, 1).astype(np.float32)).to(device),
+        "image": torch.as_tensor(image.transpose(2, 0, 1).astype(np.float32)).to(
+            device
+        ),
         "height": h,
         "width": w,
     }
@@ -109,8 +129,7 @@ def extract_deep_feature_for_box(model, image, box, device):
         imgs = model.preprocess_image([inp])
         feats = model.backbone(imgs.tensor)
         box_feats = model.roi_heads.box_pooler(
-            [feats[f] for f in model.roi_heads.in_features],
-            [inst.pred_boxes]
+            [feats[f] for f in model.roi_heads.in_features], [inst.pred_boxes]
         )
         box_flat = model.roi_heads.box_head(box_feats)
     return box_flat[0].cpu().numpy()
@@ -119,7 +138,9 @@ def extract_deep_feature_for_box(model, image, box, device):
 def load_segmenter(weights_path):
     cfg = get_cfg()
     cfg.merge_from_file(
-        model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml")
+        model_zoo.get_config_file(
+            "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
+        )
     )
     cfg.MODEL.WEIGHTS = weights_path
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1
@@ -130,8 +151,11 @@ def load_segmenter(weights_path):
 
 
 def main(img_path, out_seg=None):
-    mask_weights = os.path.join(SCRIPT_DIR, "weights", "model_final.pth")
-    xgb_path = os.path.join(SCRIPT_DIR, "weights", "xgb_classifier_deep.pkl")
+    mask_weights = os.path.join(
+        SCRIPT_DIR, "mark_rnn", "model_config", "model_final.pth"
+    )
+
+    xgb_path = os.path.join(SCRIPT_DIR, "xgboost", "xgb_classifier_deep.pkl")
 
     # Create results folder on run (relative to project root)
     results_dir = os.path.join(SCRIPT_DIR, "results")
@@ -203,13 +227,23 @@ def main(img_path, out_seg=None):
         feats = np.hstack([hfeat, dfeat]).reshape(1, -1)
 
         pred_idx = int(clf.predict(feats)[0])
-        if hasattr(clf, 'classes_') and hasattr(clf.classes_, '__len__'):
+        print("Prediction:", clf.predict(feats))
+
+        if hasattr(clf, "classes_") and hasattr(clf.classes_, "__len__"):
             try:
                 score = float(clf.classes_[pred_idx])
             except (ValueError, IndexError, TypeError):
-                score = SCORE_MAP[pred_idx] if 0 <= pred_idx < len(SCORE_MAP) else float(pred_idx)
+                score = (
+                    SCORE_MAP[pred_idx]
+                    if 0 <= pred_idx < len(SCORE_MAP)
+                    else float(pred_idx)
+                )
         else:
-            score = SCORE_MAP[pred_idx] if 0 <= pred_idx < len(SCORE_MAP) else float(pred_idx)
+            score = (
+                SCORE_MAP[pred_idx]
+                if 0 <= pred_idx < len(SCORE_MAP)
+                else float(pred_idx)
+            )
         per_cell_scores.append(score)
 
     if len(per_cell_scores) == 0:
@@ -225,16 +259,26 @@ def main(img_path, out_seg=None):
         f.write(f"Input image: {img_path}\n")
         f.write(f"Number of cells detected: {len(per_cell_scores)}\n")
         f.write(f"Per-cell death scores: {per_cell_scores.tolist()}\n")
-        f.write(f"Drug efficacy score (mean cell death score): {drug_efficacy_score:.4f}\n")
+        f.write(
+            f"Drug efficacy score (mean cell death score): {drug_efficacy_score:.4f}\n"
+        )
     print(f"Score saved: {score_path}")
 
     print(f"Per-cell death scores: {per_cell_scores.tolist()}")
-    print(f"Final drug efficacy score (mean cell death score): {drug_efficacy_score:.4f}")
+    print(
+        f"Final drug efficacy score (mean cell death score): {drug_efficacy_score:.4f}"
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run Mask R-CNN + XGBoost inference and output segmentation image and drug efficacy score.")
+    parser = argparse.ArgumentParser(
+        description="Run Mask R-CNN + XGBoost inference and output segmentation image and drug efficacy score."
+    )
     parser.add_argument("--image", required=True, help="Path to input microscopy image")
-    parser.add_argument("--out_seg", default=None, help="Path for segmentation output image (default: <image_stem>_segmentation.png)")
+    parser.add_argument(
+        "--out_seg",
+        default=None,
+        help="Path for segmentation output image (default: <image_stem>_segmentation.png)",
+    )
     args = parser.parse_args()
     main(args.image, args.out_seg)
