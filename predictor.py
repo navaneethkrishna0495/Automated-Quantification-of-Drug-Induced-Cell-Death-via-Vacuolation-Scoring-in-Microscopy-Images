@@ -1,8 +1,3 @@
-"""
-Reproducible inference: image -> Mask R-CNN segmentation -> XGBoost -> drug efficacy score.
-Rewritten to exactly match the working Kaggle inference pipeline.
-"""
-
 import os
 import sys
 import argparse
@@ -37,10 +32,9 @@ from skimage.feature import graycomatrix, graycoprops, local_binary_pattern
 from scipy.stats import skew, kurtosis
 
 
-# Class-index -> numeric cell-death score (paper: 0, 0.3, 0.6, 0.9, 1.0)
 REVERSE_MAP = {0: 0.0, 1: 0.3, 2: 0.6, 3: 0.9, 4: 1.0}
 
-# Project root (directory containing predictor.py)
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -50,12 +44,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Mask R-CNN weights live inside segmenation_model/
 MASK_RCNN_WEIGHTS = os.path.join(SCRIPT_DIR, "segmenation_model", "model_final.pth")
 
-# XGBoost model lives inside the repo
+# XGBoost model
 XGBOOST_MODEL = os.path.join(SCRIPT_DIR, "xgboost", "xgboost_cell_model.pkl")
 
 
 # ---------------------------------------------------------------------------
-# Feature extraction  (handcrafted) — exact copy from Kaggle predict_new.py
+# Feature extraction  (handcrafted) 
 # ---------------------------------------------------------------------------
 def extract_handcrafted(crop):
     features = {}
@@ -150,7 +144,6 @@ def extract_handcrafted(crop):
 
 # ---------------------------------------------------------------------------
 # Feature extraction  (deep — from Mask R-CNN backbone)
-# Exact copy from Kaggle predict_new.py
 # ---------------------------------------------------------------------------
 def extract_deep(model, device, image, box):
     h, w = image.shape[:2]
@@ -206,7 +199,7 @@ def load_xgboost(model_path):
 
 
 # ---------------------------------------------------------------------------
-# Main inference pipeline  (mirrors the Kaggle cell)
+# Main inference pipeline
 # ---------------------------------------------------------------------------
 def main(img_path, out_seg=None):
     # ---- resolve & validate model paths ----
@@ -264,7 +257,6 @@ def main(img_path, out_seg=None):
         print("No cells detected. Drug efficacy score not computed.")
         return
 
-    # ---- per-cell classification (exact Kaggle flow) ----
     individual_scores = []
 
     for i in range(n_cells):
@@ -272,14 +264,12 @@ def main(img_path, out_seg=None):
         box = instances.pred_boxes.tensor[i].numpy().astype(int)
         x1, y1, x2, y2 = box
 
-        # Mask-based crop (same as Kaggle code)
         masked = cv2.bitwise_and(image, image, mask=mask)
         crop = masked[max(0, y1):y2, max(0, x1):x2]
 
         if crop.size == 0:
             continue
 
-        # Feature extraction (exact Kaggle functions)
         hand = extract_handcrafted(crop)
         deep = extract_deep(model, device, image, box)
         feat = np.hstack([hand, deep]).reshape(1, -1)
@@ -325,7 +315,7 @@ def _save_score_file(results_dir, img_stem, img_path, n_cells, scores, final_sco
 
 
 # ---------------------------------------------------------------------------
-# Default test image (relative to this script)
+# Default test image
 # ---------------------------------------------------------------------------
 DEFAULT_IMAGE = os.path.join(SCRIPT_DIR, "img", "image_6h_4.jpg")
 
